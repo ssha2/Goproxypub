@@ -2,10 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"log"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/segmentio/kafka-go"
 )
 
 type LogElem struct {
@@ -16,23 +17,16 @@ type LogElem struct {
 	t     time.Time //timestamp
 }
 
-type ConfigKafka struct {
-	config *kafka.ConfigMap
-	topic  string
+type Kafkaparam struct {
+	topicname string
+	brokeradr string
+	partition uint
 }
 
-var configKafka ConfigKafka
+var kafkaparam Kafkaparam
 
-// https://docs.confluent.io/platform/current/installation/configuration/producer-configs.htm
 func configkafka(topicname string, brokeradr string) {
-	configKafka = ConfigKafka{
-		&kafka.ConfigMap{
-			"bootstrap.servers":   brokeradr,
-			"retries":             1,
-			"delivery.timeout.ms": 1000,
-		},
-		topicname,
-	}
+	kafkaparam = Kafkaparam{topicname, brokeradr, 1}
 }
 
 func bytestoKafka(elem LogElem) {
@@ -48,61 +42,33 @@ func bytestoKafka(elem LogElem) {
 	buffer.Write(elem.head)
 	buffer.WriteString("\n$$body$$")
 	buffer.Write(elem.body)
-	kafka_simle_one(buffer.Bytes(), []byte(elem.ltype))
+	senttoKofkaRecover(buffer.Bytes(), []byte(elem.ltype))
 }
 
-func kafka_simle_one(b []byte, k []byte) {
-
-	producer, err := kafka.NewProducer(configKafka.config)
-	if err != nil {
-		log.Println("Failed create producer:\n", err)
-		return //silent exit
-	}
-
-	// Listen to all the events on the default events channel
-	// go func() {
-	// 	for e := range producer.Events() {
-	// 		switch ev := e.(type) {
-	// 		case *kafka.Message:
-	// 			// The message delivery report, indicating success or
-	// 			// permanent failure after retries have been exhausted.
-	// 			// Application level retries won't help since the client
-	// 			// is already configured to do that.
-	// 			m := ev
-	// 			if m.TopicPartition.Error != nil {
-	// 				log.Printf("Delivery failed: %v\n", m.TopicPartition.Error)
-	// 			} else {
-	// 				log.Printf("Delivered message to topic %s [%d] at offset %v\n",
-	// 					*m.TopicPartition.Topic, m.TopicPartition.Partition, m.TopicPartition.Offset)
-	// 			}
-	// 		case kafka.Error:
-	// 			// Generic client instance-level errors, such as
-	// 			// broker connection failures, authentication issues, etc.
-	// 			//
-	// 			// These errors should generally be considered informational
-	// 			// as the underlying client will automatically try to
-	// 			// recover from any errors encountered, the application
-	// 			// does not need to take action on them.
-	// 			log.Printf("Error: %v\n", ev)
-	// 		default:
-	// 			log.Printf("Ignored event: %s\n", ev)
-	// 		}
-	// 	}
-	// }()
-
-	err = producer.Produce(&kafka.Message{
-		TopicPartition: kafka.TopicPartition{Topic: &configKafka.topic, Partition: kafka.PartitionAny},
-		Value:          b,
-		Key:            k,
-	}, nil)
-	if err != nil {
-		log.Println("Failed to produce message:\n", err)
-	} else {
-		// Flush and close the producer and the events channel
-		for producer.Flush(1000) > 0 {
-			//just wait
+func senttoKofkaRecover(b []byte, k []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println("recover error:", r)
 		}
-	}
-	producer.Close()
+	}()
+	senttoKofka(b, k)
+}
 
+func senttoKofka(b []byte, k []byte) {
+
+	conn, err := kafka.DialLeader(context.Background(), "tcp", kafkaparam.brokeradr, kafkaparam.topicname, int(kafkaparam.partition))
+	if err != nil {
+		log.Println("failed to dial leader:", err)
+	}
+
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_, err = conn.WriteMessages(
+		kafka.Message{Key: k, Value: b})
+	if err != nil {
+		log.Println("failed to write messages:", err)
+	}
+
+	if err := conn.Close(); err != nil {
+		log.Println("failed to close writer:", err)
+	}
 }
