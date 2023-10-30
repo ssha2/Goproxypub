@@ -48,7 +48,7 @@ func bytestoKafka(elem LogElem) {
 func senttoKofkaRecover(b []byte, k []byte) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Println("recover error:", r)
+			log.Println("recovered panic:", r)
 		}
 	}()
 	senttoKofka(b, k)
