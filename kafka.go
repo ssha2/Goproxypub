@@ -9,7 +9,7 @@ import (
 )
 
 type LogElem struct {
-	ltype string    // respomse or request or error
+	ltype string    // response or request or error
 	u_id  string    // session id
 	head  []byte    // headers
 	body  []byte    // body
@@ -23,10 +23,13 @@ type ConfigKafka struct {
 
 var configKafka ConfigKafka
 
+// https://docs.confluent.io/platform/current/installation/configuration/producer-configs.htm
 func configkafka(topicname string, brokeradr string) {
 	configKafka = ConfigKafka{
 		&kafka.ConfigMap{
-			"bootstrap.servers": brokeradr,
+			"bootstrap.servers":   brokeradr,
+			"retries":             1,
+			"delivery.timeout.ms": 1000,
 		},
 		topicname,
 	}
@@ -52,7 +55,7 @@ func kafka_simle_one(b []byte, k []byte) {
 
 	producer, err := kafka.NewProducer(configKafka.config)
 	if err != nil {
-		log.Printf("Failed create producer: %v\n", err)
+		log.Println("Failed create producer:\n", err)
 		return //silent exit
 	}
 
@@ -93,12 +96,12 @@ func kafka_simle_one(b []byte, k []byte) {
 		Key:            k,
 	}, nil)
 	if err != nil {
-		log.Printf("Failed to produce message: %v\n", err)
-	}
-
-	// Flush and close the producer and the events channel
-	for producer.Flush(1000) > 0 {
-		//just wait
+		log.Println("Failed to produce message:\n", err)
+	} else {
+		// Flush and close the producer and the events channel
+		for producer.Flush(1000) > 0 {
+			//just wait
+		}
 	}
 	producer.Close()
 
