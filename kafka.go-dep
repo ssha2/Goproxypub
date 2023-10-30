@@ -54,7 +54,6 @@ func bytestoKafka(elem LogElem) {
 
 func kafka_simle_one(b []byte, k []byte) {
 
-	log.Println("START!!!!!!!!!!!")
 	producer, err := kafka.NewProducer(configKafka.config)
 	if err != nil {
 
@@ -102,18 +101,15 @@ func kafka_simle_one(b []byte, k []byte) {
 		Key:            k,
 	}, nil)
 	if err != nil {
-
-		log.Println("ERRR2")
 		log.Println("Failed to produce message:\n", err)
 	} else {
 		// Flush and close the producer and the events channel
 		for producer.Flush(1000) > 0 {
 
-			log.Println("FLUSJ")
+			log.Println("FLUSH")
 			//just wait
 		}
 	}
 
-	log.Println("CLOSE")
 
 }

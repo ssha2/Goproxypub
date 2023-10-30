@@ -26,7 +26,7 @@ type Kafkaparam struct {
 var kafkaparam Kafkaparam
 
 func configkafka(topicname string, brokeradr string) {
-	kafkaparam = Kafkaparam{topicname, brokeradr, 1}
+	kafkaparam = Kafkaparam{topicname, brokeradr, 0}
 }
 
 func bytestoKafka(elem LogElem) {

@@ -150,16 +150,21 @@ func main() {
 	flag.StringVar(&brokeradr, "a", defbrokerard, "Kafaka brokeradr ")
 	flag.Parse()
 
+	// config kafaka producer
+	configkafka(topicname, brokeradr)
+
 	//reverce proxy
 	proxy := &httputil.ReverseProxy{
 		Director:     directionHandler(targetURL),
 		ErrorHandler: errHandler,
 	}
 
-	// confic kafaka producer
-	configkafka(topicname, brokeradr)
+	//// to be remove just for test
+	go toberevome_consumer()
+	//////////////////////////////
 
 	if err := http.ListenAndServe(local, servHandler(proxy)); err != nil {
 		log.Fatal(err)
 	}
+
 }
