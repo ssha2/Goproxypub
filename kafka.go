@@ -9,14 +9,6 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-type LogElem struct {
-	ltype string    // response or request or error
-	u_id  string    // session id
-	head  []byte    // headers
-	body  []byte    // body
-	t     time.Time //timestamp
-}
-
 type Kafkaparam struct {
 	topicname string
 	brokeradr string
@@ -29,7 +21,7 @@ func configkafka(topicname string, brokeradr string) {
 	kafkaparam = Kafkaparam{topicname, brokeradr, 0}
 }
 
-func bytestoKafka(elem LogElem) {
+func bytestoKafka(elem loggingElem) {
 
 	var buffer bytes.Buffer
 	buffer.WriteString("$$meta$$")

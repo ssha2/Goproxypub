@@ -22,6 +22,8 @@ const (
 	// .\goproxy.exe -l "localhost:4589" -t "https://httpbin.org"
 	deftopicname = "loggingproxy"
 	defbrokerard = "localhost:9092"
+	defsize      = 5
+	defcount     = 5
 )
 
 const (
@@ -30,7 +32,7 @@ const (
 	loggingResponse  = "resp"
 )
 
-/***********************Кастомный writer для proxy + логирование response*******************************/
+/***********************writer для proxy + логирование response*******************************/
 
 type CustomResponseWriter struct {
 	http.ResponseWriter
@@ -54,7 +56,7 @@ func (rr *CustomResponseWriter) Write(b []byte) (int, error) {
 		}
 	}
 
-	go bytestoKafka(LogElem{loggingResponse, rr.u_id, headBytes, b, time.Now()})
+	loggingsend(loggingElem{loggingResponse, rr.u_id, headBytes, b, time.Now()})
 
 	return rr.ResponseWriter.Write(b)
 }
@@ -88,7 +90,7 @@ func logRequest(r *http.Request, u_id *string) {
 		// перевыставляем буфер
 		r.Body = io.NopCloser(io.NewSectionReader(bytes.NewReader(bodyBytes), 0, int64(len(bodyBytes))))
 	}
-	go bytestoKafka(LogElem{loggingRequest, *u_id, headBytes, bodyBytes, time.Now()})
+	loggingsend(loggingElem{loggingRequest, *u_id, headBytes, bodyBytes, time.Now()})
 
 }
 
@@ -128,13 +130,13 @@ func errHandler(w http.ResponseWriter, r *http.Request, e error) {
 			headBytes = append(headBytes, value...)
 		}
 	}
-	go bytestoKafka(LogElem{loggingException, r.Header.Get(pepHeader), headBytes, []byte(e.Error()), time.Now()})
+	loggingsend(loggingElem{loggingException, r.Header.Get(pepHeader), headBytes, []byte(e.Error()), time.Now()})
 	w.WriteHeader(http.StatusInternalServerError)
 	w.Write([]byte(e.Error()))
 
 }
 
-/***********************entry point*******************************/
+/******************************************************/
 func main() {
 
 	var (
@@ -142,13 +144,21 @@ func main() {
 		targetURL string
 		topicname string
 		brokeradr string
+		size      int
+		count     int
 	)
 
 	flag.StringVar(&local, "l", deflocal, "Local ip:port")
 	flag.StringVar(&targetURL, "t", defurl, "Target http(s)://ip:port ")
 	flag.StringVar(&topicname, "n", deftopicname, "Kafaka topicname")
 	flag.StringVar(&brokeradr, "a", defbrokerard, "Kafaka brokeradr ")
+	flag.IntVar(&size, "s", defsize, "Channel size ")
+	flag.IntVar(&count, "c", defcount, "Channels count ")
 	flag.Parse()
+
+	//logging
+	logginginit(count, size)
+	loggingrun()
 
 	// config kafaka producer
 	configkafka(topicname, brokeradr)
@@ -160,7 +170,7 @@ func main() {
 	}
 
 	//// to be remove just for test
-	go toberevome_consumer()
+	//go toberevome_consumer()
 	//////////////////////////////
 
 	if err := http.ListenAndServe(local, servHandler(proxy)); err != nil {
