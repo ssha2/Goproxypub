@@ -1,8 +1,9 @@
-package main
+package kafka
 
 import (
 	"bytes"
 	"context"
+	"goproxy/common"
 	"log"
 	"time"
 
@@ -21,7 +22,7 @@ func configkafka(topicname string, brokeradr string) {
 	kafkaparam = Kafkaparam{topicname, brokeradr, 0}
 }
 
-func bytestoKafka(elem loggingElem) {
+func bytestoKafka(elem common.LoggingElem) {
 
 	var buffer bytes.Buffer
 	buffer.WriteString("$$meta$$")

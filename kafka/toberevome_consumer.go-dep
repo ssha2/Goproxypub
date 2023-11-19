@@ -1,5 +1,5 @@
 // to be remove just for test
-package main
+package kafka
 
 import (
 	"context"
