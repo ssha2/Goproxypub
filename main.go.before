@@ -1,0 +1,197 @@
+package main
+
+//Для теста
+//curl -X POST "http://localhost:4589/post" -H "accept: application/json" -d '{"test:test"}'
+//curl -X POST "http://localhost:4589/post" -H "accept: application/json" --data-binary "@C:/Users/ssha/Downloads/demo-big-20170815.sql"
+// .\goproxy.exe -l "localhost:4589" -t "https://httpbin.org"
+
+import (
+	"bytes"
+	"flag"
+	"goproxy/common"
+	"goproxy/logger"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httputil"
+	_ "net/http/pprof"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
+
+/***********************uuid *******************************/
+
+func generateUniqueID() string {
+	//id := uuid.New()
+	//return id.String()
+
+	id := strconv.FormatInt(time.Now().UnixNano(), 10)
+	return id
+}
+
+/***********************custom response*******************************/
+
+type CustomResponseWriter struct {
+	http.ResponseWriter
+	u_id string
+}
+
+func (rr *CustomResponseWriter) WriteHeader(statusCode int) {
+	if rr.Header().Get(common.PepHeader) != "" {
+		rr.Header().Add(common.PepHeader, rr.u_id)
+	}
+	rr.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (rr *CustomResponseWriter) Write(b []byte) (int, error) {
+
+	//резет copyBuffer > 32*1024 []byte
+	// headBytes := []byte("")
+	// for name, values := range rr.Header() {
+	// 	for _, value := range values {
+	// 		headBytes = append(headBytes, name...)
+	// 		headBytes = append(headBytes, ":"...)
+	// 		headBytes = append(headBytes, value...)
+	// 		headBytes = append(headBytes, "\n"...)
+	// 	}
+	// }
+	// logger.Loggingsend(common.LoggingElem{LType: common.LogResponse, SID: rr.u_id, Head: headBytes, Body: b, Times: time.Now()})
+
+	return rr.ResponseWriter.Write(b)
+}
+
+/***********************log response *******************************/
+func logResponse(rs *http.Response) {
+
+	headBytes := []byte("")
+	for name, values := range rs.Header {
+		for _, value := range values {
+			headBytes = append(append(append(append(headBytes, name...), ":"...), value...), "\n"...)
+		}
+	}
+	var bodyBytes []byte
+	if !common.RSP_ExcepBodyPath[rs.Request.URL.Path] {
+		if rs.Body != nil {
+			bodyBytes, _ = io.ReadAll(rs.Body)
+			defer rs.Body.Close()
+			// перевыставляем буфер
+			rs.Body = io.NopCloser(io.NewSectionReader(bytes.NewReader(bodyBytes), 0, int64(len(bodyBytes))))
+		}
+	}
+	logger.Loggingsend(common.LoggingElem{LType: common.LogResponse, SID: rs.Request.Header.Get(common.PepHeader), Head: headBytes, Body: bodyBytes, Times: time.Now()})
+
+}
+
+/***********************log request *******************************/
+
+func logRequest(r *http.Request, u_id *string) {
+
+	headBytes := append(append(append([]byte("path:"), r.URL.Path...), "\nquery:"...), r.URL.RawQuery...)
+	for name, values := range r.Header {
+		for _, value := range values {
+			headBytes = append(append(append(append(headBytes, "\n"...), name...), ":"...), value...)
+		}
+	}
+	var bodyBytes []byte
+	if !common.RGS_ExcepBodyPath[r.URL.Path] {
+		if r.Body != nil {
+			bodyBytes, _ = io.ReadAll(r.Body)
+			defer r.Body.Close()
+			r.Body = io.NopCloser(io.NewSectionReader(bytes.NewReader(bodyBytes), 0, int64(len(bodyBytes))))
+		}
+	}
+	logger.Loggingsend(common.LoggingElem{LType: common.LogRequest, SID: *u_id, Head: headBytes, Body: bodyBytes, Times: time.Now()})
+
+}
+
+/***********************handlers request*******************************/
+
+func servHandler(nextHandler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u_id := generateUniqueID()
+		r.Header.Add(common.PepHeader, u_id)
+		logRequest(r, &u_id)
+		if nextHandler != nil {
+			nextHandler.ServeHTTP(&CustomResponseWriter{w, u_id}, r)
+		}
+	})
+}
+
+/***********************handlers proxy*******************************/
+
+func directionHandler(targetUrl string) func(*http.Request) {
+	return func(req *http.Request) {
+		target, _ := url.Parse(targetUrl)
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
+		req.Host = target.Host
+	}
+}
+
+func modifyHandler() func(*http.Response) error {
+	return func(rs *http.Response) error {
+		logResponse(rs)
+		return nil
+	}
+}
+
+func errHandler(w http.ResponseWriter, r *http.Request, e error) {
+	headBytes := []byte("")
+	for name, values := range r.Header {
+		for _, value := range values {
+			headBytes = append(append(append(append(headBytes, "\n"...), name...), ":"...), value...)
+		}
+	}
+	logger.Loggingsend(common.LoggingElem{LType: common.LogException, SID: r.Header.Get(common.PepHeader), Head: headBytes, Body: []byte(e.Error()), Times: time.Now()})
+	w.WriteHeader(http.StatusInternalServerError)
+	w.Write([]byte(e.Error()))
+
+}
+
+/******************************************************/
+func main() {
+	var (
+		local     string
+		targetURL string
+		size      int
+		count     int
+		pgurl     string
+		rgssplit  string
+		rspsplit  string
+	)
+
+	flag.StringVar(&local, "l", common.Deflocal, "local ip:port")
+	flag.StringVar(&targetURL, "t", common.Defurl, "target http(s)://ip:port ")
+	flag.IntVar(&size, "s", common.Defsize, "one channel size ")
+	flag.IntVar(&count, "c", common.Defcount, "channels count ")
+	flag.StringVar(&pgurl, "g", common.Defpgurl, "postgres url")
+	flag.StringVar(&rgssplit, "i", "", "skip body requets  \"path1,path2,path..\"")
+	flag.StringVar(&rspsplit, "o", "", "skip body response \"path1,path2,path..\"")
+	flag.IntVar(&common.DEBUG_LEVEL, "d", common.DEBUG_LEVEL, "debug level (0,1,2,3)")
+	flag.Parse()
+
+	for _, v := range strings.Split(rgssplit, ",") {
+		common.RGS_ExcepBodyPath[v] = true
+	}
+	for _, v := range strings.Split(rspsplit, ",") {
+		common.RSP_ExcepBodyPath[v] = true
+	}
+
+	//logging set
+	logger.Logginginit(count, size)
+	logger.Loggingrun(pgurl)
+
+	//reverce proxy set
+	proxy := &httputil.ReverseProxy{
+		Director:       directionHandler(targetURL),
+		ErrorHandler:   errHandler,
+		ModifyResponse: modifyHandler(),
+	}
+
+	if err := http.ListenAndServe(local, servHandler(proxy)); err != nil {
+		log.Fatal(err)
+	}
+
+}

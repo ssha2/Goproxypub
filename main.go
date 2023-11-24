@@ -14,50 +14,12 @@ import (
 	"log"
 	"net/http"
 	"net/http/httputil"
+	_ "net/http/pprof"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
-
-/***********************uuid *******************************/
-
-func generateUniqueID() string {
-	id := uuid.New()
-	return id.String()
-}
-
-/***********************custom response*******************************/
-
-type CustomResponseWriter struct {
-	http.ResponseWriter
-	u_id string
-}
-
-func (rr *CustomResponseWriter) WriteHeader(statusCode int) {
-	if rr.Header().Get(common.PepHeader) != "" {
-		rr.Header().Add(common.PepHeader, rr.u_id)
-	}
-	rr.ResponseWriter.WriteHeader(statusCode)
-}
-
-func (rr *CustomResponseWriter) Write(b []byte) (int, error) {
-
-	//резет copyBuffer > 32*1024 []byte
-	// headBytes := []byte("")
-	// for name, values := range rr.Header() {
-	// 	for _, value := range values {
-	// 		headBytes = append(headBytes, name...)
-	// 		headBytes = append(headBytes, ":"...)
-	// 		headBytes = append(headBytes, value...)
-	// 		headBytes = append(headBytes, "\n"...)
-	// 	}
-	// }
-	// logger.Loggingsend(common.LoggingElem{LType: common.LogResponse, SID: rr.u_id, Head: headBytes, Body: b, Times: time.Now()})
-
-	return rr.ResponseWriter.Write(b)
-}
 
 /***********************log response *******************************/
 func logResponse(rs *http.Response) {
@@ -77,7 +39,12 @@ func logResponse(rs *http.Response) {
 			rs.Body = io.NopCloser(io.NewSectionReader(bytes.NewReader(bodyBytes), 0, int64(len(bodyBytes))))
 		}
 	}
-	logger.Loggingsend(common.LoggingElem{LType: common.LogResponse, SID: rs.Request.Header.Get(common.PepHeader), Head: headBytes, Body: bodyBytes, Times: time.Now()})
+	logger.Loggingsend(common.LoggingElem{
+		LType: common.LogResponse,
+		SID:   rs.Request.Header.Get(common.PepHeader),
+		Head:  headBytes,
+		Body:  bodyBytes,
+		Times: time.Now()})
 
 }
 
@@ -99,51 +66,12 @@ func logRequest(r *http.Request, u_id *string) {
 			r.Body = io.NopCloser(io.NewSectionReader(bytes.NewReader(bodyBytes), 0, int64(len(bodyBytes))))
 		}
 	}
-	logger.Loggingsend(common.LoggingElem{LType: common.LogRequest, SID: *u_id, Head: headBytes, Body: bodyBytes, Times: time.Now()})
-
-}
-
-/***********************handlers request*******************************/
-
-func servHandler(nextHandler http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u_id := generateUniqueID()
-		r.Header.Add(common.PepHeader, u_id)
-		logRequest(r, &u_id)
-		if nextHandler != nil {
-			nextHandler.ServeHTTP(&CustomResponseWriter{w, u_id}, r)
-		}
-	})
-}
-
-/***********************handlers proxy*******************************/
-
-func directionHandler(targetUrl string) func(*http.Request) {
-	return func(req *http.Request) {
-		target, _ := url.Parse(targetUrl)
-		req.URL.Scheme = target.Scheme
-		req.URL.Host = target.Host
-		req.Host = target.Host
-	}
-}
-
-func modifyHandler() func(*http.Response) error {
-	return func(rs *http.Response) error {
-		logResponse(rs)
-		return nil
-	}
-}
-
-func errHandler(w http.ResponseWriter, r *http.Request, e error) {
-	headBytes := []byte("")
-	for name, values := range r.Header {
-		for _, value := range values {
-			headBytes = append(append(append(append(headBytes, "\n"...), name...), ":"...), value...)
-		}
-	}
-	logger.Loggingsend(common.LoggingElem{LType: common.LogException, SID: r.Header.Get(common.PepHeader), Head: headBytes, Body: []byte(e.Error()), Times: time.Now()})
-	w.WriteHeader(http.StatusInternalServerError)
-	w.Write([]byte(e.Error()))
+	logger.Loggingsend(common.LoggingElem{
+		LType: common.LogRequest,
+		SID:   *u_id,
+		Head:  headBytes,
+		Body:  bodyBytes,
+		Times: time.Now()})
 
 }
 
@@ -182,12 +110,42 @@ func main() {
 
 	//reverce proxy set
 	proxy := &httputil.ReverseProxy{
-		Director:       directionHandler(targetURL),
-		ErrorHandler:   errHandler,
-		ModifyResponse: modifyHandler(),
+		Director: func(req *http.Request) {
+			target, _ := url.Parse(targetURL)
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			req.Host = target.Host
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, e error) {
+			headBytes := []byte("")
+			for name, values := range r.Header {
+				for _, value := range values {
+					headBytes = append(append(append(append(headBytes, "\n"...), name...), ":"...), value...)
+				}
+			}
+			logger.Loggingsend(common.LoggingElem{LType: common.LogException,
+				SID:   r.Header.Get(common.PepHeader),
+				Head:  headBytes,
+				Body:  []byte(e.Error()),
+				Times: time.Now()})
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(e.Error()))
+
+		},
+		ModifyResponse: func(rs *http.Response) error {
+			rs.Header.Add(common.PepHeader, rs.Request.Header.Get(common.PepHeader))
+			logResponse(rs)
+			return nil
+		},
 	}
 
-	if err := http.ListenAndServe(local, servHandler(proxy)); err != nil {
+	if err := http.ListenAndServe(local,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			u_id := strconv.FormatInt(time.Now().UnixNano(), 10)
+			r.Header.Add(common.PepHeader, u_id)
+			logRequest(r, &u_id)
+			proxy.ServeHTTP(w, r)
+		})); err != nil {
 		log.Fatal(err)
 	}
 
