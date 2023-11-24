@@ -1,5 +1,10 @@
 package main
 
+//Для теста
+//curl -X POST "http://localhost:4589/post" -H "accept: application/json" -d '{"test:test"}'
+//curl -X POST "http://localhost:4589/post" -H "accept: application/json" --data-binary "@C:/Users/ssha/Downloads/demo-big-20170815.sql"
+// .\goproxy.exe -l "localhost:4589" -t "https://httpbin.org"
+
 import (
 	"bytes"
 	"flag"
@@ -10,16 +15,20 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-//Для теста
-//curl -X POST "http://localhost:4589/post" -H "accept: application/json" -d '{"test:test"}'
-// .\goproxy.exe -l "localhost:4589" -t "https://httpbin.org"
+/***********************uuid *******************************/
 
-/***********************writer для proxy + логирование response*******************************/
+func generateUniqueID() string {
+	id := uuid.New()
+	return id.String()
+}
+
+/***********************custom response*******************************/
 
 type CustomResponseWriter struct {
 	http.ResponseWriter
@@ -27,13 +36,15 @@ type CustomResponseWriter struct {
 }
 
 func (rr *CustomResponseWriter) WriteHeader(statusCode int) {
-	rr.Header().Add(common.PepHeader, rr.u_id)
+	if rr.Header().Get(common.PepHeader) != "" {
+		rr.Header().Add(common.PepHeader, rr.u_id)
+	}
 	rr.ResponseWriter.WriteHeader(statusCode)
 }
 
 func (rr *CustomResponseWriter) Write(b []byte) (int, error) {
 
-	// режет большие объемы flushем - логирование перенесено в modify
+	//резет copyBuffer > 32*1024 []byte
 	// headBytes := []byte("")
 	// for name, values := range rr.Header() {
 	// 	for _, value := range values {
@@ -48,6 +59,7 @@ func (rr *CustomResponseWriter) Write(b []byte) (int, error) {
 	return rr.ResponseWriter.Write(b)
 }
 
+/***********************log response *******************************/
 func logResponse(rs *http.Response) {
 
 	headBytes := []byte("")
@@ -57,22 +69,19 @@ func logResponse(rs *http.Response) {
 		}
 	}
 	var bodyBytes []byte
-	if rs.Body != nil {
-		bodyBytes, _ = io.ReadAll(rs.Body)
-		defer rs.Body.Close()
-		// перевыставляем буфер
-		rs.Body = io.NopCloser(io.NewSectionReader(bytes.NewReader(bodyBytes), 0, int64(len(bodyBytes))))
+	if !common.RSP_ExcepBodyPath[rs.Request.URL.Path] {
+		if rs.Body != nil {
+			bodyBytes, _ = io.ReadAll(rs.Body)
+			defer rs.Body.Close()
+			// перевыставляем буфер
+			rs.Body = io.NopCloser(io.NewSectionReader(bytes.NewReader(bodyBytes), 0, int64(len(bodyBytes))))
+		}
 	}
-	logger.Loggingsend(common.LoggingElem{LType: common.LogResponse, SID: rs.Header.Get(common.PepHeader), Head: headBytes, Body: bodyBytes, Times: time.Now()})
+	logger.Loggingsend(common.LoggingElem{LType: common.LogResponse, SID: rs.Request.Header.Get(common.PepHeader), Head: headBytes, Body: bodyBytes, Times: time.Now()})
 
 }
 
-/***********************Логирование request *******************************/
-
-func generateUniqueID() string {
-	id := uuid.New()
-	return id.String()
-}
+/***********************log request *******************************/
 
 func logRequest(r *http.Request, u_id *string) {
 
@@ -83,18 +92,19 @@ func logRequest(r *http.Request, u_id *string) {
 		}
 	}
 	var bodyBytes []byte
-	if r.Body != nil {
-		bodyBytes, _ = io.ReadAll(r.Body)
-		defer r.Body.Close()
-		r.Body = io.NopCloser(io.NewSectionReader(bytes.NewReader(bodyBytes), 0, int64(len(bodyBytes))))
+	if !common.RGS_ExcepBodyPath[r.URL.Path] {
+		if r.Body != nil {
+			bodyBytes, _ = io.ReadAll(r.Body)
+			defer r.Body.Close()
+			r.Body = io.NopCloser(io.NewSectionReader(bytes.NewReader(bodyBytes), 0, int64(len(bodyBytes))))
+		}
 	}
 	logger.Loggingsend(common.LoggingElem{LType: common.LogRequest, SID: *u_id, Head: headBytes, Body: bodyBytes, Times: time.Now()})
 
 }
 
-/***********************Хендлеры http*******************************/
+/***********************handlers request*******************************/
 
-// handle для  реквеста
 func servHandler(nextHandler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u_id := generateUniqueID()
@@ -106,7 +116,8 @@ func servHandler(nextHandler http.Handler) http.Handler {
 	})
 }
 
-// handle direction
+/***********************handlers proxy*******************************/
+
 func directionHandler(targetUrl string) func(*http.Request) {
 	return func(req *http.Request) {
 		target, _ := url.Parse(targetUrl)
@@ -116,7 +127,6 @@ func directionHandler(targetUrl string) func(*http.Request) {
 	}
 }
 
-// handle modify
 func modifyHandler() func(*http.Response) error {
 	return func(rs *http.Response) error {
 		logResponse(rs)
@@ -124,7 +134,6 @@ func modifyHandler() func(*http.Response) error {
 	}
 }
 
-// handle ошибки от прокси
 func errHandler(w http.ResponseWriter, r *http.Request, e error) {
 	headBytes := []byte("")
 	for name, values := range r.Header {
@@ -146,20 +155,32 @@ func main() {
 		size      int
 		count     int
 		pgurl     string
+		rgssplit  string
+		rspsplit  string
 	)
 
-	flag.StringVar(&local, "l", common.Deflocal, "Local ip:port")
-	flag.StringVar(&targetURL, "t", common.Defurl, "Target http(s)://ip:port ")
-	flag.IntVar(&size, "s", common.Defsize, "Channel size ")
-	flag.IntVar(&count, "c", common.Defcount, "Channels count ")
-	flag.StringVar(&pgurl, "g", common.Defpgurl, "Posg url")
+	flag.StringVar(&local, "l", common.Deflocal, "local ip:port")
+	flag.StringVar(&targetURL, "t", common.Defurl, "target http(s)://ip:port ")
+	flag.IntVar(&size, "s", common.Defsize, "one channel size ")
+	flag.IntVar(&count, "c", common.Defcount, "channels count ")
+	flag.StringVar(&pgurl, "g", common.Defpgurl, "postgres url")
+	flag.StringVar(&rgssplit, "i", "", "skip body requets  \"path1,path2,path..\"")
+	flag.StringVar(&rspsplit, "o", "", "skip body response \"path1,path2,path..\"")
+	flag.IntVar(&common.DEBUG_LEVEL, "d", common.DEBUG_LEVEL, "debug level (0,1,2,3)")
 	flag.Parse()
 
-	//logging
-	logger.Logginginit(count, size)
-	logger.Loggingrun(&pgurl)
+	for _, v := range strings.Split(rgssplit, ",") {
+		common.RGS_ExcepBodyPath[v] = true
+	}
+	for _, v := range strings.Split(rspsplit, ",") {
+		common.RSP_ExcepBodyPath[v] = true
+	}
 
-	//reverce proxy
+	//logging set
+	logger.Logginginit(count, size)
+	logger.Loggingrun(pgurl)
+
+	//reverce proxy set
 	proxy := &httputil.ReverseProxy{
 		Director:       directionHandler(targetURL),
 		ErrorHandler:   errHandler,

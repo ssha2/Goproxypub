@@ -23,7 +23,7 @@ const (
 	Defurl   = "https://httpbin.org"
 	Defsize  = 5
 	Defcount = 5
-	Defpgurl = ""
+	Defpgurl = "куда-то"
 )
 
 const ExecuteLogString = "insert into public.logging(ltype,sid,head,body,t) values($1,$2,$3,$4,$5)"
@@ -40,3 +40,8 @@ const (
 )
 
 var DEBUG_LEVEL = 3 /* 0 - no, 1- info, 2- log */
+
+var (
+	RGS_ExcepBodyPath = map[string]bool{}
+	RSP_ExcepBodyPath = map[string]bool{}
+)

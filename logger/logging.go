@@ -1,6 +1,6 @@
 package logger
 
-/*логирование в несколько потоков на своих каналах*/
+/*логирование в нескольких каналах*/
 
 import (
 	"database/sql"
@@ -14,6 +14,7 @@ var (
 	channels []chan common.LoggingElem = nil
 )
 
+/***********************сайзинг каналов *******************************/
 func Logginginit(countsize int, size int) {
 	counts = countsize
 	// на всякий
@@ -65,7 +66,7 @@ func loggingselector(elem common.LoggingElem, cnl chan common.LoggingElem) bool 
 	}
 }
 
-/***********************консьюмеры и отправители *******************************/
+/***********************из канала в DB*******************************/
 
 func Loggingrun(pgurl string) {
 
